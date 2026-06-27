@@ -9,7 +9,6 @@ export default function SmoothScroll() {
       duration: 1.2,
       easing: (t: number) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
       smoothWheel: true,
-      smoothTouch: false, // keep native touch scrolling on mobile
     });
 
     let rafId: number;
