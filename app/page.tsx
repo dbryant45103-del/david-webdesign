@@ -103,7 +103,7 @@ export default function Home() {
                   </h1>
                 </div>
                 <p className="text-xl text-white/75 leading-relaxed mb-10">
-                  Professional websites, fast and affordable.
+                  Professional websites for local businesses.
                 </p>
                 <div className="flex flex-wrap gap-4">
                   <a
