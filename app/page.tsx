@@ -6,6 +6,14 @@ import Nav from "./components/Nav";
 import FadeIn from "./components/FadeIn";
 import IntroAnimation from "./components/IntroAnimation";
 
+type PortfolioItem = {
+  id: number;
+  title: string;
+  description: string;
+  image_url: string | null;
+  link: string | null;
+};
+
 const iconProps = {
   viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
   strokeWidth: "1.5", strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true,
@@ -54,12 +62,19 @@ const SendIcon = ({ className }: { className?: string }) => (
 export default function Home() {
   const [formState, setFormState] = useState<"idle" | "sending" | "success" | "error">("idle");
   const [heroProgress, setHeroProgress] = useState(0);
+  const [portfolio, setPortfolio] = useState<PortfolioItem[]>([]);
 
   useEffect(() => {
     const onScroll = () =>
       setHeroProgress(Math.min(window.scrollY / (window.innerHeight * 0.45), 1));
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/portfolio")
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data)) setPortfolio(data); });
   }, []);
   return (
     <div className="min-h-screen bg-gray-800 text-gray-900 font-sans">
@@ -297,6 +312,51 @@ export default function Home() {
           </div>
         </FadeIn>
       </section>
+
+      {/* Portfolio */}
+      {portfolio.length > 0 && (
+        <section id="portfolio" className="py-8 px-6">
+          <FadeIn className="max-w-5xl mx-auto border border-indigo-200/60 rounded-2xl p-10 bg-gray-200 shadow-md">
+            <h2 className="text-3xl font-bold mb-4">Recent work</h2>
+            <p className="text-gray-500 text-lg mb-12 max-w-xl">
+              A look at some of the sites I&apos;ve built for local businesses.
+            </p>
+            <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-6">
+              {portfolio.map((item) => (
+                <div
+                  key={item.id}
+                  className="bg-white rounded-2xl border border-gray-200/70 shadow-sm overflow-hidden transition-all duration-200 hover:-translate-y-1 hover:shadow-lg flex flex-col"
+                >
+                  {item.image_url && (
+                    <div className="relative w-full aspect-video bg-gray-100">
+                      <Image
+                        src={item.image_url}
+                        alt={item.title}
+                        fill
+                        className="object-cover"
+                      />
+                    </div>
+                  )}
+                  <div className="p-6 flex flex-col flex-1">
+                    <h3 className="text-base font-semibold mb-2">{item.title}</h3>
+                    <p className="text-gray-500 text-sm leading-relaxed flex-1">{item.description}</p>
+                    {item.link && (
+                      <a
+                        href={item.link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-4 inline-block text-center border border-indigo-300/50 text-indigo-600 px-4 py-2 rounded-lg text-sm font-medium shadow-sm hover:bg-indigo-50 transition-colors"
+                      >
+                        View project
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </FadeIn>
+        </section>
+      )}
 
       {/* Contact */}
       <section id="contact" className="py-8 px-6">
