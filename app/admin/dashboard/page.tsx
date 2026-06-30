@@ -2,7 +2,7 @@
 
 export const dynamic = "force-dynamic";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createBrowserClient } from "@supabase/ssr";
 
@@ -14,6 +14,14 @@ type Lead = {
   business: string;
   status: string | null;
   created_at: string;
+};
+
+type PortfolioEntry = {
+  id: string;
+  title: string;
+  description: string;
+  image_url: string | null;
+  link: string | null;
 };
 
 const STATUS_STYLES: Record<string, string> = {
@@ -64,6 +72,17 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+
+  const [portfolio, setPortfolio] = useState<PortfolioEntry[]>([]);
+  const [portfolioLoading, setPortfolioLoading] = useState(true);
+  const [portfolioError, setPortfolioError] = useState<string | null>(null);
+  const [portfolioForm, setPortfolioForm] = useState({ title: "", description: "", link: "" });
+  const [portfolioFile, setPortfolioFile] = useState<File | null>(null);
+  const [portfolioSubmitting, setPortfolioSubmitting] = useState(false);
+  const [portfolioFormError, setPortfolioFormError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const router = useRouter();
 
   const supabase = createBrowserClient(
@@ -79,18 +98,88 @@ export default function DashboardPage() {
         return;
       }
 
-      const { data, error } = await supabase
-        .from("leads")
-        .select("*")
-        .order("created_at", { ascending: false });
+      const [leadsResult, portfolioResult] = await Promise.all([
+        supabase.from("leads").select("*").order("created_at", { ascending: false }),
+        supabase.from("portfolio").select("id, title, description, image_url, link").order("id", { ascending: true }),
+      ]);
 
-      if (error) setError(error.message);
-      else setLeads(data ?? []);
+      if (leadsResult.error) setError(leadsResult.error.message);
+      else setLeads(leadsResult.data ?? []);
+
+      if (portfolioResult.error) setPortfolioError(portfolioResult.error.message);
+      else setPortfolio(portfolioResult.data ?? []);
+
       setLoading(false);
+      setPortfolioLoading(false);
     }
 
     load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handlePortfolioSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setPortfolioFormError(null);
+    if (!portfolioForm.title.trim() || !portfolioForm.description.trim()) {
+      setPortfolioFormError("Title and description are required.");
+      return;
+    }
+    setPortfolioSubmitting(true);
+
+    let imageUrl: string | null = null;
+    if (portfolioFile) {
+      const ext = portfolioFile.name.split(".").pop();
+      const path = `${Date.now()}.${ext}`;
+      const { error: uploadError } = await supabase.storage
+        .from("portfolio-images")
+        .upload(path, portfolioFile, { upsert: false });
+      if (uploadError) {
+        setPortfolioFormError(`Image upload failed: ${uploadError.message}`);
+        setPortfolioSubmitting(false);
+        return;
+      }
+      const { data: urlData } = supabase.storage.from("portfolio-images").getPublicUrl(path);
+      imageUrl = urlData.publicUrl;
+    }
+
+    const { data, error: insertError } = await supabase
+      .from("portfolio")
+      .insert({
+        title: portfolioForm.title.trim(),
+        description: portfolioForm.description.trim(),
+        link: portfolioForm.link.trim() || null,
+        image_url: imageUrl,
+      })
+      .select("id, title, description, image_url, link")
+      .single();
+
+    if (insertError) {
+      setPortfolioFormError(`Failed to save: ${insertError.message}`);
+    } else {
+      setPortfolio((prev) => [...prev, data]);
+      setPortfolioForm({ title: "", description: "", link: "" });
+      setPortfolioFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+    setPortfolioSubmitting(false);
+  }
+
+  async function handlePortfolioDelete(entry: PortfolioEntry) {
+    setDeletingId(entry.id);
+
+    if (entry.image_url) {
+      const url = new URL(entry.image_url);
+      const parts = url.pathname.split("/portfolio-images/");
+      if (parts.length === 2) {
+        await supabase.storage.from("portfolio-images").remove([parts[1]]);
+      }
+    }
+
+    const { error: deleteError } = await supabase.from("portfolio").delete().eq("id", entry.id);
+    if (!deleteError) {
+      setPortfolio((prev) => prev.filter((p) => p.id !== entry.id));
+    }
+    setDeletingId(null);
+  }
 
   async function updateStatus(id: string, status: string) {
     setUpdatingId(id);
@@ -250,6 +339,152 @@ export default function DashboardPage() {
             </div>
           </div>
         )}
+
+        {/* Portfolio Management */}
+        <div className="mt-12">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-base font-semibold text-gray-900">
+              Portfolio
+              {!portfolioLoading && !portfolioError && (
+                <span className="ml-2 text-sm font-normal text-gray-400">
+                  {portfolio.length} {portfolio.length === 1 ? "project" : "projects"}
+                </span>
+              )}
+            </h2>
+          </div>
+
+          {/* Add project form */}
+          <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm mb-6">
+            <h3 className="text-sm font-semibold text-gray-700 mb-4">Add New Project</h3>
+            <form onSubmit={handlePortfolioSubmit} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">
+                    Title <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={portfolioForm.title}
+                    onChange={(e) => setPortfolioForm((f) => ({ ...f, title: e.target.value }))}
+                    placeholder="Project title"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">
+                    Link <span className="text-gray-300 font-normal">(optional)</span>
+                  </label>
+                  <input
+                    type="url"
+                    value={portfolioForm.link}
+                    onChange={(e) => setPortfolioForm((f) => ({ ...f, link: e.target.value }))}
+                    placeholder="https://example.com"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-transparent"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">
+                  Description <span className="text-red-400">*</span>
+                </label>
+                <textarea
+                  value={portfolioForm.description}
+                  onChange={(e) => setPortfolioForm((f) => ({ ...f, description: e.target.value }))}
+                  placeholder="Short project description"
+                  rows={3}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-transparent resize-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">
+                  Image <span className="text-gray-300 font-normal">(optional)</span>
+                </label>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setPortfolioFile(e.target.files?.[0] ?? null)}
+                  className="block w-full text-sm text-gray-500 file:mr-4 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
+                />
+              </div>
+              {portfolioFormError && (
+                <p className="text-xs text-red-600">{portfolioFormError}</p>
+              )}
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  disabled={portfolioSubmitting}
+                  className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-wait text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
+                >
+                  {portfolioSubmitting ? "Saving…" : "Add Project"}
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Existing entries */}
+          {portfolioLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="text-gray-400 text-sm">Loading…</div>
+            </div>
+          ) : portfolioError ? (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-6 text-center">
+              <p className="text-red-700 text-sm font-medium">Error loading portfolio</p>
+              <p className="text-red-500 text-xs mt-1">{portfolioError}</p>
+            </div>
+          ) : portfolio.length === 0 ? (
+            <div className="bg-white border border-gray-200 rounded-xl p-12 text-center">
+              <p className="text-gray-400 text-sm">No portfolio projects yet</p>
+              <p className="text-gray-300 text-xs mt-1">Add your first project above</p>
+            </div>
+          ) : (
+            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+              <ul className="divide-y divide-gray-100">
+                {portfolio.map((entry) => (
+                  <li key={entry.id} className="flex items-center gap-4 px-5 py-4 hover:bg-gray-50 transition-colors">
+                    {entry.image_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={entry.image_url}
+                        alt={entry.title}
+                        className="w-14 h-14 object-cover rounded-lg border border-gray-100 flex-shrink-0"
+                      />
+                    ) : (
+                      <div className="w-14 h-14 rounded-lg border border-gray-100 bg-gray-50 flex items-center justify-center flex-shrink-0">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className="text-gray-300">
+                          <rect x="2" y="2" width="16" height="16" rx="2" stroke="currentColor" strokeWidth="1.5" />
+                          <circle cx="7" cy="7" r="1.5" fill="currentColor" />
+                          <path d="M2 13l4-4 3 3 3-3 4 4" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+                        </svg>
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{entry.title}</p>
+                      <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{entry.description}</p>
+                      {entry.link && (
+                        <a
+                          href={entry.link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-indigo-600 hover:underline mt-0.5 inline-block truncate max-w-xs"
+                        >
+                          {entry.link}
+                        </a>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handlePortfolioDelete(entry)}
+                      disabled={deletingId === entry.id}
+                      className="flex-shrink-0 text-xs text-red-500 hover:text-red-700 border border-red-200 hover:border-red-300 hover:bg-red-50 disabled:opacity-40 disabled:cursor-wait rounded-lg px-3 py-1.5 transition-colors"
+                    >
+                      {deletingId === entry.id ? "Deleting…" : "Delete"}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
       </main>
     </div>
   );
